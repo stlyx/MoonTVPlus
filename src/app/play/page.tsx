@@ -112,6 +112,57 @@ function PlayPageClient() {
     blockAdEnabledRef.current = blockAdEnabled;
   }, [blockAdEnabled]);
 
+  // 自定义去广告代码（从服务器获取并缓存）
+  const customAdFilterCodeRef = useRef<string>('');
+
+  // 初始化时获取自定义去广告代码
+  useEffect(() => {
+    const fetchAdFilterCode = async () => {
+      if (typeof window === 'undefined') return;
+
+      try {
+        // 先从 localStorage 获取缓存的代码，立即可用
+        const cachedCode = localStorage.getItem('custom_ad_filter_code_cache');
+        const cachedVersion = localStorage.getItem('custom_ad_filter_version_cache');
+
+        if (cachedCode) {
+          customAdFilterCodeRef.current = cachedCode;
+          console.log('使用缓存的去广告代码');
+        }
+
+        // 异步从服务器获取最新版本号，检查是否需要更新
+        const response = await fetch('/api/ad-filter');
+        if (!response.ok) {
+          console.warn('获取去广告代码配置失败，使用缓存');
+          return;
+        }
+
+        const { code, version } = await response.json();
+
+        // 如果版本号不一致或没有缓存，更新缓存
+        if (!cachedVersion || parseInt(cachedVersion) !== version) {
+          console.log('检测到去广告代码更新，更新本地缓存');
+          if (code) {
+            localStorage.setItem('custom_ad_filter_code_cache', code);
+            localStorage.setItem('custom_ad_filter_version_cache', version.toString());
+            customAdFilterCodeRef.current = code;
+          } else if (!cachedCode) {
+            // 如果服务器没有代码且本地也没有缓存，清空缓存
+            localStorage.removeItem('custom_ad_filter_code_cache');
+            localStorage.removeItem('custom_ad_filter_version_cache');
+          }
+        } else {
+          console.log('去广告代码已是最新版本');
+        }
+      } catch (error) {
+        console.error('获取去广告代码配置失败:', error);
+        // 失败时已经使用了缓存，无需额外处理
+      }
+    };
+
+    fetchAdFilterCode();
+  }, []);
+
   // Anime4K超分相关状态
   const [webGPUSupported, setWebGPUSupported] = useState<boolean>(false);
   const [anime4kEnabled, setAnime4kEnabled] = useState<boolean>(false);
@@ -1067,6 +1118,30 @@ function PlayPageClient() {
   };
 
   function filterAdsFromM3U8(type: string, m3u8Content: string): string {
+    // 尝试使用缓存的自定义去广告代码
+    if (customAdFilterCodeRef.current && customAdFilterCodeRef.current.trim()) {
+      try {
+        // 移除 TypeScript 类型注解，转换为纯 JavaScript
+        const jsCode = customAdFilterCodeRef.current
+          // 移除函数参数的类型注解：name: type
+          .replace(/(\w+)\s*:\s*(string|number|boolean|any|void|never|unknown|object)\s*([,)])/g, '$1$3')
+          // 移除函数返回值类型注解：): type {
+          .replace(/\)\s*:\s*(string|number|boolean|any|void|never|unknown|object)\s*\{/g, ') {')
+          // 移除变量声明的类型注解：const name: type =
+          .replace(/(const|let|var)\s+(\w+)\s*:\s*(string|number|boolean|any|void|never|unknown|object)\s*=/g, '$1 $2 =');
+
+        // 创建并执行自定义函数
+        const customFunction = new Function('type', 'm3u8Content',
+          jsCode + '\nreturn filterAdsFromM3U8(type, m3u8Content);'
+        );
+        return customFunction(type, m3u8Content);
+      } catch (err) {
+        console.error('执行自定义去广告代码失败，使用默认规则:', err);
+        // 如果自定义代码执行失败，继续使用默认规则
+      }
+    }
+
+    // 默认去广告规则
     if (!m3u8Content) return '';
 
     // 按行分割M3U8内容
