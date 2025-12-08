@@ -1,8 +1,10 @@
 // Socket.IO 客户端管理
-import { io, Socket } from 'socket.io-client';
+import type { Socket } from 'socket.io-client';
+import { io } from 'socket.io-client';
+
 import type {
-  ServerToClientEvents,
   ClientToServerEvents,
+  ServerToClientEvents,
   WatchRoomConfig,
 } from '@/types/watch-room';
 
@@ -20,8 +22,8 @@ class WatchRoomSocketManager {
 
     this.config = config;
 
-    const socketOptions: any = {
-      transports: ['websocket', 'polling'],
+    const socketOptions = {
+      transports: ['websocket', 'polling'] as ('websocket' | 'polling')[],
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
@@ -66,11 +68,15 @@ class WatchRoomSocketManager {
       }
 
       this.socket.on('connect', () => {
+        // eslint-disable-next-line no-console
         console.log('[WatchRoom] Connected to server');
-        resolve(this.socket!);
+        if (this.socket) {
+          resolve(this.socket);
+        }
       });
 
       this.socket.on('connect_error', (error) => {
+        // eslint-disable-next-line no-console
         console.error('[WatchRoom] Connection error:', error);
         reject(error);
       });
@@ -101,14 +107,17 @@ class WatchRoomSocketManager {
     if (!this.socket) return;
 
     this.socket.on('connect', () => {
+      // eslint-disable-next-line no-console
       console.log('[WatchRoom] Socket connected');
     });
 
     this.socket.on('disconnect', (reason) => {
+      // eslint-disable-next-line no-console
       console.log('[WatchRoom] Socket disconnected:', reason);
     });
 
     this.socket.on('error', (error) => {
+      // eslint-disable-next-line no-console
       console.error('[WatchRoom] Socket error:', error);
     });
   }
