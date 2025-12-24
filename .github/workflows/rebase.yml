@@ -1,0 +1,60 @@
+name: Upstream Sync (Rebase)
+
+permissions:
+  contents: write
+
+on:
+  schedule:
+    - cron: "0 */8 * * *" # 每天运行
+  workflow_dispatch:      # 允许手动触发
+
+jobs:
+  sync_with_rebase:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.repository.fork }}
+
+    steps:
+      # 1. 检出代码 (关键：必须设置 fetch-depth: 0 以获取全部历史)
+      - name: Checkout target repo
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 2. 配置 Git 用户信息 (Rebase 需要提交者身份)
+      - name: Configure Git
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+      # 3. 执行 Rebase 逻辑
+      - name: Sync and Rebase
+        run: |
+          # 设置变量
+          UPSTREAM_URL="https://github.com/mtvpls/MoonTVPlus.git" # 请修改此处为上游地址
+          UPSTREAM_BRANCH="main"                                # 上游分支名
+          TARGET_BRANCH="main"                                  # 你的目标分支名
+
+          # 添加上游远程仓库
+          git remote add upstream $UPSTREAM_URL
+
+          # 获取上游更新
+          git fetch upstream $UPSTREAM_BRANCH
+
+          # 切换到你的分支
+          git checkout $TARGET_BRANCH
+
+          # --- 核心步骤：Rebase ---
+          # 尝试将你的修改变基到上游最新代码之上
+          if git rebase upstream/$UPSTREAM_BRANCH; then
+            echo "Rebase successful."
+          else
+            echo "::error::Rebase failed due to conflicts."
+            git rebase --abort
+            exit 1
+          fi
+
+      # 4. 强制推送 (因为历史被重写，必须 force push)
+      - name: Push changes
+        run: |
+          git push origin main --force-with-lease
