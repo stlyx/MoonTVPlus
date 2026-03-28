@@ -1,5 +1,6 @@
 /* eslint-disable @next/next/no-img-element */
 
+import { Link as LinkIcon, Settings } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import React, {
   useCallback,
@@ -8,13 +9,13 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { Settings } from 'lucide-react';
+
+import type { DanmakuComment,DanmakuSelection } from '@/lib/danmaku/types';
+import { EpisodeFilterConfig,SearchResult } from '@/lib/types';
+import { getVideoResolutionFromM3u8, processImageUrl } from '@/lib/utils';
 
 import DanmakuPanel from '@/components/DanmakuPanel';
 import EpisodeFilterSettings from '@/components/EpisodeFilterSettings';
-import type { DanmakuSelection, DanmakuComment } from '@/lib/danmaku/types';
-import { SearchResult, EpisodeFilterConfig } from '@/lib/types';
-import { getVideoResolutionFromM3u8, processImageUrl } from '@/lib/utils';
 
 // 定义视频信息类型
 interface VideoInfo {
@@ -103,6 +104,10 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
   );
   // 标记初始测速是否已完成
   const [initialTestingCompleted, setInitialTestingCompleted] = useState(false);
+  // 标记是否正在进行全部重测
+  const [isRetestingAll, setIsRetestingAll] = useState(false);
+  // 标记是否正在进行初始测速
+  const [isInitialTesting, setIsInitialTesting] = useState(false);
 
   // 使用 ref 来避免闭包问题
   const attemptedSourcesRef = useRef<Set<string>>(new Set());
@@ -247,6 +252,36 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
     }
   }, [speedTestTimeout]);
 
+  // 重测所有源的函数
+  const retestAllSources = useCallback(async () => {
+    if (!availableSources || availableSources.length === 0) return;
+
+    setIsRetestingAll(true);
+
+    // 清空之前的测速结果
+    setVideoInfoMap(new Map());
+    setAttemptedSources(new Set());
+    attemptedSourcesRef.current = new Set();
+    videoInfoMapRef.current = new Map();
+
+    // 筛选需要测速的源（排除 openlist/emby/xiaoya）
+    const sourcesToTest = availableSources.filter((source) => {
+      if (source.source === 'openlist' || source.source === 'emby' || source.source.startsWith('emby_') || source.source === 'xiaoya') {
+        return false;
+      }
+      return true;
+    });
+
+    // 分批测速，每批最多5个
+    const batchSize = 5;
+    for (let i = 0; i < sourcesToTest.length; i += batchSize) {
+      const batch = sourcesToTest.slice(i, i + batchSize);
+      await Promise.all(batch.map(source => getVideoInfo(source)));
+    }
+
+    setIsRetestingAll(false);
+  }, [availableSources, getVideoInfo]);
+
   // 当有预计算结果时，先合并到videoInfoMap中
   useEffect(() => {
     if (precomputedVideoInfo && precomputedVideoInfo.size > 0) {
@@ -300,6 +335,9 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
 
       if (pendingSources.length === 0) return;
 
+      // 标记开始初始测速
+      setIsInitialTesting(true);
+
       const batchSize = Math.ceil(pendingSources.length / 2);
 
       for (let start = 0; start < pendingSources.length; start += batchSize) {
@@ -308,6 +346,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
       }
 
       // 初始测速完成后，标记为已完成
+      setIsInitialTesting(false);
       if (!initialTestingCompleted) {
         setInitialTestingCompleted(true);
       }
@@ -726,7 +765,24 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
 
       {/* 换源 Tab 内容 */}
       {activeTab === 'sources' && (
-        <div className='flex flex-col h-full mt-4'>
+        <div className='flex flex-col h-full mt-2'>
+          {/* 全部重测按钮 - 右上角 */}
+          {!sourceSearchLoading && !sourceSearchError && availableSources.length > 0 && (
+            <div className='flex justify-end mb-2 px-2 pb-2 border-b border-gray-300 dark:border-gray-700'>
+              <button
+                onClick={retestAllSources}
+                disabled={isRetestingAll || retestingSources.size > 0 || isInitialTesting}
+                className={`text-xs font-medium transition-colors ${
+                  isRetestingAll || retestingSources.size > 0 || isInitialTesting
+                    ? 'text-gray-400 dark:text-gray-500 cursor-not-allowed'
+                    : 'text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 cursor-pointer'
+                }`}
+              >
+                {isRetestingAll ? '重测中...' : isInitialTesting ? '测速中...' : '全部重测'}
+              </button>
+            </div>
+          )}
+
           {sourceSearchLoading && (
             <div className='flex items-center justify-center py-8'>
               <div className='animate-spin rounded-full h-8 w-8 border-b-2 border-green-500'></div>
@@ -810,8 +866,10 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                           }`.trim()}
                       >
                         {/* 封面 */}
-                        <div className='flex-shrink-0 w-12 h-20 bg-gray-300 dark:bg-gray-600 rounded overflow-hidden'>
-                          {source.poster && (
+                        <div className='flex-shrink-0 w-12 h-20 bg-gray-300 dark:bg-gray-600 rounded overflow-hidden flex items-center justify-center'>
+                          {source.source === 'directplay' ? (
+                            <LinkIcon className='w-6 h-6 text-blue-500' />
+                          ) : source.poster ? (
                             <img
                               src={processImageUrl(source.poster)}
                               alt={source.title}
@@ -821,7 +879,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                                 target.style.display = 'none';
                               }}
                             />
-                          )}
+                          ) : null}
                         </div>
 
                         {/* 信息区域 */}

@@ -2,11 +2,12 @@
  * 离线下载任务管理 API
  */
 
+import * as fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';
+import * as path from 'path';
+
 import { getAuthInfoFromCookie } from '@/lib/auth';
 import { OfflineDownloader, OfflineDownloadTask } from '@/lib/offline-downloader';
-import * as fs from 'fs';
-import * as path from 'path';
 
 // 检查是否启用离线下载功能
 const OFFLINE_DOWNLOAD_ENABLED = process.env.NEXT_PUBLIC_ENABLE_OFFLINE_DOWNLOAD === 'true';
@@ -303,18 +304,27 @@ export async function DELETE(request: NextRequest) {
 
     const downloader = getDownloader();
 
+    // 如果任务正在下载，先标记为取消状态，等待下载停止
+    const downloadPromise = activeDownloads.get(taskId);
+    if (downloadPromise) {
+      // 将任务状态设置为 error，这样下载器会停止下载
+      task.status = 'error';
+      task.errorMessage = '任务已被删除';
+      tasks.set(taskId, task);
+
+      // 从活跃下载列表中移除
+      activeDownloads.delete(taskId);
+
+      // 等待一小段时间，让下载操作有机会停止
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
     // 删除文件
     await downloader.deleteTask(task);
 
     // 从任务列表中移除
     tasks.delete(taskId);
     saveTasks(); // 持久化任务
-
-    // 如果正在下载，等待下载完成后再删除
-    const downloadPromise = activeDownloads.get(taskId);
-    if (downloadPromise) {
-      activeDownloads.delete(taskId);
-    }
 
     return NextResponse.json({ message: '任务已删除' });
   } catch (error) {

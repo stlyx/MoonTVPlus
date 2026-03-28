@@ -1,9 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { NextResponse } from 'next/server';
-import { getTMDBTrendingContent, getTMDBVideos } from '@/lib/tmdb.client';
+
 import { getConfig } from '@/lib/config';
 import { fetchDoubanData } from '@/lib/douban';
+import { getTMDBTrendingContent, getTMDBVideos } from '@/lib/tmdb.client';
 
 // 缓存配置 - 服务器内存缓存3小时
 const CACHE_DURATION = 3 * 60 * 60 * 1000; // 3小时
@@ -308,11 +309,6 @@ async function getDoubanBannerContent(): Promise<{ code: number; list: any[] }> 
 
           const detail = await fetchDoubanData<DoubanDetailResponse>(detailUrl);
 
-          // 获取预告片链接（取第一个）- 豆瓣是直链视频URL
-          const trailerUrl = detail.trailers && detail.trailers.length > 0
-            ? detail.trailers[0].video_url
-            : null;
-
           // 获取横屏图片
           const backdropPath = detail.cover_url || movie.pic?.large || movie.pic?.normal || '';
 
@@ -344,7 +340,6 @@ async function getDoubanBannerContent(): Promise<{ code: number; list: any[] }> 
             media_type: 'movie',
             genre_ids: [],
             genres: tags, // 使用从card_subtitle提取的标签
-            trailer_url: trailerUrl, // 豆瓣预告片直链
             video_key: null, // 豆瓣不使用YouTube key
           };
         } catch (error) {
@@ -376,7 +371,6 @@ async function getDoubanBannerContent(): Promise<{ code: number; list: any[] }> 
             media_type: 'movie',
             genre_ids: [],
             genres: tags, // 使用从card_subtitle提取的标签
-            trailer_url: null,
             video_key: null,
           };
         }

@@ -2,9 +2,10 @@
 
 'use client';
 
-import { ChevronRight, Bot, ListVideo } from 'lucide-react';
+import { Bot, ChevronRight, Link as LinkIcon, ListVideo, Music } from 'lucide-react';
 import Link from 'next/link';
-import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { Suspense, useEffect, useState } from 'react';
 
 import {
   BangumiCalendarData,
@@ -13,16 +14,17 @@ import {
 import { getDoubanCategories } from '@/lib/douban.client';
 import { getTMDBImageUrl, TMDBItem } from '@/lib/tmdb.client';
 import { DoubanItem } from '@/lib/types';
-import { processImageUrl } from '@/lib/utils';
+import { base58Encode, processImageUrl } from '@/lib/utils';
 
+import AIChatPanel from '@/components/AIChatPanel';
+import BannerCarousel from '@/components/BannerCarousel';
 import ContinueWatching from '@/components/ContinueWatching';
+import FireworksCanvas from '@/components/FireworksCanvas';
+import HttpWarningDialog from '@/components/HttpWarningDialog';
 import PageLayout from '@/components/PageLayout';
 import ScrollableRow from '@/components/ScrollableRow';
 import { useSite } from '@/components/SiteProvider';
 import VideoCard from '@/components/VideoCard';
-import HttpWarningDialog from '@/components/HttpWarningDialog';
-import BannerCarousel from '@/components/BannerCarousel';
-import AIChatPanel from '@/components/AIChatPanel';
 
 // 首页模块配置接口
 interface HomeModule {
@@ -44,6 +46,7 @@ function HomeClient() {
   >([]);
   const [loading, setLoading] = useState(true);
   const { announcement } = useSite();
+  const router = useRouter();
 
   // 首页模块配置状态
   const [homeModules, setHomeModules] = useState<HomeModule[]>([
@@ -54,6 +57,8 @@ function HomeClient() {
     { id: 'hotVarietyShows', name: '热门综艺', enabled: true, order: 4 },
     { id: 'upcomingContent', name: '即将上映', enabled: true, order: 5 },
   ]);
+  const [homeBannerEnabled, setHomeBannerEnabled] = useState(true);
+  const [homeContinueWatchingEnabled, setHomeContinueWatchingEnabled] = useState(true);
 
   const [showAnnouncement, setShowAnnouncement] = useState(false);
   const [showHttpWarning, setShowHttpWarning] = useState(true);
@@ -61,34 +66,57 @@ function HomeClient() {
   const [aiEnabled, setAiEnabled] = useState(false);
   const [aiDefaultMessageNoVideo, setAiDefaultMessageNoVideo] = useState('你好！我是MoonTVPlus的AI影视助手。想看什么电影或剧集？需要推荐吗？');
   const [sourceSearchEnabled, setSourceSearchEnabled] = useState(true);
+  const [musicEnabled, setMusicEnabled] = useState(false);
+  const [showDirectPlayDialog, setShowDirectPlayDialog] = useState(false);
+  const [directPlayUrl, setDirectPlayUrl] = useState('');
+
+  const handleDirectPlay = () => {
+    setDirectPlayUrl('');
+    setShowDirectPlayDialog(true);
+  };
+
+  const submitDirectPlay = () => {
+    const trimmed = directPlayUrl.trim();
+    if (!trimmed) return;
+    const encoded = base58Encode(trimmed);
+    if (!encoded) return;
+    setShowDirectPlayDialog(false);
+    setDirectPlayUrl('');
+    router.push(`/play?source=directplay&id=${encodeURIComponent(encoded)}`);
+  };
+
+  const loadHomeLayoutSettings = () => {
+    if (typeof window === 'undefined') return;
+
+    const savedHomeModules = localStorage.getItem('homeModules');
+    if (savedHomeModules) {
+      try {
+        setHomeModules(JSON.parse(savedHomeModules));
+      } catch (error) {
+        console.error('解析首页模块配置失败:', error);
+      }
+    }
+
+    const savedHomeBannerEnabled = localStorage.getItem('homeBannerEnabled');
+    if (savedHomeBannerEnabled !== null) {
+      setHomeBannerEnabled(savedHomeBannerEnabled === 'true');
+    }
+
+    const savedHomeContinueWatchingEnabled = localStorage.getItem('homeContinueWatchingEnabled');
+    if (savedHomeContinueWatchingEnabled !== null) {
+      setHomeContinueWatchingEnabled(savedHomeContinueWatchingEnabled === 'true');
+    }
+  };
 
   // 加载首页模块配置
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const savedHomeModules = localStorage.getItem('homeModules');
-      if (savedHomeModules) {
-        try {
-          setHomeModules(JSON.parse(savedHomeModules));
-        } catch (error) {
-          console.error('解析首页模块配置失败:', error);
-        }
-      }
-    }
+    loadHomeLayoutSettings();
   }, []);
 
   // 监听首页模块配置更新事件
   useEffect(() => {
     const handleHomeModulesUpdated = () => {
-      if (typeof window !== 'undefined') {
-        const savedHomeModules = localStorage.getItem('homeModules');
-        if (savedHomeModules) {
-          try {
-            setHomeModules(JSON.parse(savedHomeModules));
-          } catch (error) {
-            console.error('解析首页模块配置失败:', error);
-          }
-        }
-      }
+      loadHomeLayoutSettings();
     };
 
     window.addEventListener('homeModulesUpdated', handleHomeModulesUpdated);
@@ -121,6 +149,14 @@ function HomeClient() {
     }
   }, []);
 
+  // 检查音乐功能是否启用
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const enabled = (window as any).RUNTIME_CONFIG?.TUNEHUB_ENABLED === true;
+      setMusicEnabled(enabled);
+    }
+  }, []);
+
   // 检查公告弹窗状态
   useEffect(() => {
     if (typeof window !== 'undefined' && announcement) {
@@ -150,7 +186,9 @@ function HomeClient() {
     const setCache = (key: string, data: any) => {
       try {
         localStorage.setItem(key, JSON.stringify({ data, timestamp: Date.now() }));
-      } catch {}
+      } catch {
+        // Ignore localStorage errors
+      }
     };
 
     const moviesCache = getCache('homepage_movies');
@@ -186,24 +224,32 @@ function HomeClient() {
 
           if (moviesData.code === 200) {
             setHotMovies(moviesData.list);
-            setCache('homepage_movies', moviesData.list);
+            if (moviesData.list && moviesData.list.length > 0) {
+              setCache('homepage_movies', moviesData.list);
+            }
           }
           if (tvShowsData.code === 200) {
             setHotTvShows(tvShowsData.list);
-            setCache('homepage_tvshows', tvShowsData.list);
+            if (tvShowsData.list && tvShowsData.list.length > 0) {
+              setCache('homepage_tvshows', tvShowsData.list);
+            }
           }
           if (varietyShowsData.code === 200) {
             setHotVarietyShows(varietyShowsData.list);
-            setCache('homepage_variety', varietyShowsData.list);
+            if (varietyShowsData.list && varietyShowsData.list.length > 0) {
+              setCache('homepage_variety', varietyShowsData.list);
+            }
           }
           setBangumiCalendarData(bangumiCalendarData);
-          setCache('homepage_bangumi', bangumiCalendarData);
+          if (bangumiCalendarData && bangumiCalendarData.length > 0) {
+            setCache('homepage_bangumi', bangumiCalendarData);
+          }
 
           try {
             const duanjuResponse = await fetch('/api/duanju/recommends');
             if (duanjuResponse.ok) {
               const duanjuResult = await duanjuResponse.json();
-              if (duanjuResult.code === 200 && duanjuResult.data) {
+              if (duanjuResult.code === 200 && duanjuResult.data && duanjuResult.data.length > 0) {
                 setHotDuanju(duanjuResult.data);
                 setCache('homepage_duanju', duanjuResult.data);
               }
@@ -216,7 +262,7 @@ function HomeClient() {
             const response = await fetch('/api/tmdb/upcoming');
             if (response.ok) {
               const result = await response.json();
-              if (result.code === 200 && result.data) {
+              if (result.code === 200 && result.data && result.data.length > 0) {
                 const sorted = [...result.data].sort((a, b) => {
                   const dateA = new Date(a.release_date || '9999-12-31').getTime();
                   const dateB = new Date(b.release_date || '9999-12-31').getTime();
@@ -288,6 +334,7 @@ function HomeClient() {
                         rate={movie.rate}
                         type='movie'
                         from='douban'
+                        douban_id={movie.id ? parseInt(movie.id) : undefined}
                       />
                     </div>
                   ))}
@@ -447,6 +494,7 @@ function HomeClient() {
                         rate={tvShow.rate}
                         type='tv'
                         from='douban'
+                        douban_id={tvShow.id ? parseInt(tvShow.id) : undefined}
                       />
                     </div>
                   ))}
@@ -493,6 +541,7 @@ function HomeClient() {
                         rate={varietyShow.rate}
                         type='tv'
                         from='douban'
+                        douban_id={varietyShow.id ? parseInt(varietyShow.id) : undefined}
                       />
                     </div>
                   ))}
@@ -542,49 +591,72 @@ function HomeClient() {
 
   return (
     <PageLayout>
+      <FireworksCanvas />
       {/* TMDB 热门轮播图 */}
-      <div className='w-full mb-4'>
-        <BannerCarousel />
-      </div>
+      {homeBannerEnabled && (
+        <div className='w-full mb-4'>
+          <BannerCarousel delayLoad={true} />
+        </div>
+      )}
 
       <div className='px-2 sm:px-10 pb-4 sm:pb-8 overflow-visible'>
         <div className='max-w-[95%] mx-auto'>
           {/* 首页内容 */}
           <>
-              {/* 源站寻片和AI问片入口 */}
-              <div className='flex items-center justify-end gap-2 mb-4'>
-                {/* 源站寻片入口 */}
-                {sourceSearchEnabled && (
-                  <Link href='/source-search'>
-                    <button
-                      className='p-2 rounded-lg text-blue-500 hover:text-blue-600 transition-colors'
-                      title='源站寻片'
-                    >
-                      <ListVideo size={20} />
-                    </button>
-                  </Link>
-                )}
+            {/* 源站寻片和AI问片入口 */}
+            <div className={`flex items-center justify-end gap-2 mb-4 ${homeBannerEnabled ? '' : 'mt-[30px]'}`}>
+              <button
+                onClick={handleDirectPlay}
+                className='p-1.5 rounded-lg text-blue-500 hover:text-blue-600 transition-colors'
+                title='直链播放'
+              >
+                <LinkIcon size={18} />
+              </button>
 
-                {/* AI问片入口 */}
-                {aiEnabled && (
+              {/* 音乐视听入口 */}
+              {musicEnabled && (
+                <Link href='/music'>
                   <button
-                    onClick={() => setShowAIChat(true)}
-                    className='p-2 rounded-lg text-purple-500 hover:text-purple-600 transition-colors'
-                    title='AI问片'
+                    className='p-2 rounded-lg text-green-500 hover:text-green-600 transition-colors'
+                    title='音乐视听'
                   >
-                    <Bot size={20} />
+                    <Music size={20} />
                   </button>
-                )}
-              </div>
+                </Link>
+              )}
 
-              {/* 继续观看 */}
-              <ContinueWatching />
+              {/* 源站寻片入口 */}
+              {sourceSearchEnabled && (
+                <Link href='/source-search'>
+                  <button
+                    className='p-2 rounded-lg text-blue-500 hover:text-blue-600 transition-colors'
+                    title='源站寻片'
+                  >
+                    <ListVideo size={20} />
+                  </button>
+                </Link>
+              )}
 
-              {/* 根据配置动态渲染首页模块 */}
-              {homeModules
-                .filter(module => module.enabled)
-                .sort((a, b) => a.order - b.order)
-                .map(module => renderModule(module.id))}
+              {/* AI问片入口 */}
+              {aiEnabled && (
+                <button
+                  onClick={() => setShowAIChat(true)}
+                  className='p-2 rounded-lg text-purple-500 hover:text-purple-600 transition-colors'
+                  title='AI问片'
+                >
+                  <Bot size={20} />
+                </button>
+              )}
+            </div>
+
+            {/* 继续观看 */}
+            {homeContinueWatchingEnabled && <ContinueWatching />}
+
+            {/* 根据配置动态渲染首页模块 */}
+            {homeModules
+              .filter(module => module.enabled)
+              .sort((a, b) => a.order - b.order)
+              .map(module => renderModule(module.id))}
           </>
         </div>
       </div>
@@ -619,6 +691,62 @@ function HomeClient() {
             >
               知道了
             </button>
+          </div>
+        </div>
+      )}
+
+      {showDirectPlayDialog && (
+        <div
+          className='fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4'
+          onClick={() => setShowDirectPlayDialog(false)}
+        >
+          <div
+            className='bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-lg'
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className='flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700'>
+              <h3 className='text-lg font-semibold text-gray-900 dark:text-gray-100'>
+                直链播放
+              </h3>
+              <button
+                onClick={() => setShowDirectPlayDialog(false)}
+                className='p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors'
+                aria-label='关闭'
+              >
+                <span className='text-gray-600 dark:text-gray-400'>×</span>
+              </button>
+            </div>
+            <div className='p-4 space-y-4'>
+              <div className='text-sm text-gray-600 dark:text-gray-300'>
+                请输入可直接播放的视频链接。
+              </div>
+              <input
+                value={directPlayUrl}
+                onChange={(event) => setDirectPlayUrl(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    submitDirectPlay();
+                  }
+                }}
+                placeholder='https://example.com/video.m3u8'
+                className='w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500'
+              />
+              <div className='flex justify-end gap-2'>
+                <button
+                  onClick={() => setShowDirectPlayDialog(false)}
+                  className='px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors'
+                >
+                  取消
+                </button>
+                <button
+                  onClick={submitDirectPlay}
+                  disabled={!directPlayUrl.trim()}
+                  className='px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
+                >
+                  开始播放
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

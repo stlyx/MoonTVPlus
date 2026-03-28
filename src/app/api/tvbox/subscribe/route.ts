@@ -2,8 +2,8 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getAuthInfoFromCookie } from '@/lib/auth';
 import { getAvailableApiSites, getConfig } from '@/lib/config';
+import { db } from '@/lib/db';
 import { getCachedLiveChannels } from '@/lib/live';
 
 export const runtime = 'nodejs';
@@ -11,6 +11,7 @@ export const runtime = 'nodejs';
 /**
  * TVBOX订阅API
  * 根据视频源和直播源生成TVBOX订阅
+ * 支持全局token（管理员）和用户token（普通用户）
  */
 export async function GET(request: NextRequest) {
   // 检查是否开启订阅功能
@@ -25,25 +26,52 @@ export async function GET(request: NextRequest) {
   // 验证token
   const searchParams = request.nextUrl.searchParams;
   const token = searchParams.get('token');
-  const subscribeToken = process.env.TVBOX_SUBSCRIBE_TOKEN;
+  const globalToken = process.env.TVBOX_SUBSCRIBE_TOKEN;
   const adFilter = searchParams.get('adFilter') === 'true'; // 获取去广告参数
 
-  if (!subscribeToken || token !== subscribeToken) {
+  if (!token) {
     return NextResponse.json(
-      { error: '无效的订阅token' },
+      { error: '缺少订阅token' },
       { status: 401 }
     );
   }
 
-  try {
-    // 获取用户信息
-    const authInfo = getAuthInfoFromCookie(request);
-    const username = authInfo?.username;
+  // 判断是全局token还是用户token
+  let username: string | undefined;
+  let isGlobalToken = false;
 
+  if (globalToken && token === globalToken) {
+    // 全局token（管理员订阅）
+    isGlobalToken = true;
+    console.log('使用全局token访问TVBox订阅');
+  } else {
+    // 用户token，查询用户名
+    username = await db.getUsernameByTvboxToken(token) || undefined;
+    if (!username) {
+      return NextResponse.json(
+        { error: '无效的订阅token' },
+        { status: 401 }
+      );
+    }
+
+    // 检查用户是否被封禁
+    const userInfo = await db.getUserInfoV2(username);
+    if (userInfo?.banned) {
+      return NextResponse.json(
+        { error: '用户已被封禁' },
+        { status: 403 }
+      );
+    }
+
+    console.log(`用户 ${username} 访问TVBox订阅`);
+  }
+
+  try {
     // 获取配置
     const config = await getConfig();
 
     // 获取视频源
+    // 全局token返回所有源，用户token返回该用户有权限的源
     const apiSites = await getAvailableApiSites(username);
 
     // 获取直播源
@@ -80,7 +108,7 @@ export async function GET(request: NextRequest) {
       key: 'openlist',
       name: '私人影库',
       type: 1,
-      api: `${baseUrl}/api/openlist/cms-proxy/${encodeURIComponent(subscribeToken)}`,
+      api: `${baseUrl}/api/openlist/cms-proxy/${encodeURIComponent(token)}`,
       searchable: 1,
       quickSearch: 1,
       filterable: 1,
@@ -92,7 +120,7 @@ export async function GET(request: NextRequest) {
       key: `emby_${source.key}`,
       name: source.name || 'Emby媒体库',
       type: 1,
-      api: `${baseUrl}/api/emby/cms-proxy/${encodeURIComponent(subscribeToken)}?embyKey=${source.key}`,
+      api: `${baseUrl}/api/emby/cms-proxy/${encodeURIComponent(token)}?embyKey=${source.key}`,
       searchable: 1,
       quickSearch: 1,
       filterable: 1,
@@ -102,7 +130,7 @@ export async function GET(request: NextRequest) {
     // 构建TVBOX订阅数据
     const tvboxSubscription = {
       // 站点配置
-      spider: '',
+      spider: `${baseUrl}/tvbox/custom_spider.jar`,
       wallpaper: '',
 
       // 视频源站点 - 根据 adFilter 参数决定是否使用代理
@@ -159,6 +187,18 @@ export async function GET(request: NextRequest) {
       // 广告配置
       ads: [],
     };
+
+    // 获取屏蔽源列表并过滤
+    const blockedSources = process.env.TVBOX_BLOCKED_SOURCES
+      ? process.env.TVBOX_BLOCKED_SOURCES.split(',').map(s => s.trim()).filter(Boolean)
+      : [];
+
+    if (blockedSources.length > 0) {
+      tvboxSubscription.sites = tvboxSubscription.sites.filter(
+        site => !blockedSources.includes(site.key)
+      );
+      console.log('TVBOX 订阅已屏蔽源:', blockedSources);
+    }
 
     return NextResponse.json(tvboxSubscription, {
       headers: {

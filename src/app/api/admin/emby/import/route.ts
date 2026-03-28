@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
 import { getAuthInfoFromCookie } from '@/lib/auth';
-import { getConfig } from '@/lib/config';
+import { getConfig, setCachedConfig } from '@/lib/config';
 import { db } from '@/lib/db';
 
 export const runtime = 'nodejs';
@@ -37,7 +38,6 @@ export async function POST(request: NextRequest) {
     // 追加和覆盖：合并Sources数组
     if (data.Sources && Array.isArray(data.Sources)) {
       const existingSources = adminConfig.EmbyConfig?.Sources || [];
-      const existingKeys = new Set(existingSources.map(s => s.key));
 
       // 覆盖已存在的，追加新的
       const mergedSources = [...existingSources];
@@ -63,6 +63,9 @@ export async function POST(request: NextRequest) {
     }
 
     await db.saveAdminConfig(adminConfig);
+
+    // 更新内存缓存
+    await setCachedConfig(adminConfig);
 
     return NextResponse.json({
       success: true,

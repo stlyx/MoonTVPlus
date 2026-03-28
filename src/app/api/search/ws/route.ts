@@ -6,6 +6,7 @@ import { getAuthInfoFromCookie } from '@/lib/auth';
 import { getAvailableApiSites, getConfig } from '@/lib/config';
 import { searchFromApi } from '@/lib/downstream';
 import { yellowWords } from '@/lib/yellow';
+import { getProxyToken } from '@/lib/emby-token';
 
 export const runtime = 'nodejs';
 
@@ -32,6 +33,19 @@ export async function GET(request: NextRequest) {
 
   const config = await getConfig();
   const apiSites = await getAvailableApiSites(authInfo.username);
+
+  // 创建权重映射表
+  const weightMap = new Map<string, number>();
+  config.SourceConfig.forEach(source => {
+    weightMap.set(source.key, source.weight ?? 0);
+  });
+
+  // 按权重降序排序 apiSites
+  const sortedApiSites = [...apiSites].sort((a, b) => {
+    const weightA = weightMap.get(a.key) ?? 0;
+    const weightB = weightMap.get(b.key) ?? 0;
+    return weightB - weightA;
+  });
 
   // 检查是否配置了 OpenList
   const hasOpenList = !!(
@@ -89,7 +103,7 @@ export async function GET(request: NextRequest) {
       const startEvent = `data: ${JSON.stringify({
         type: 'start',
         query,
-        totalSources: apiSites.length + (hasOpenList ? 1 : 0) + embySourcesCount,
+        totalSources: sortedApiSites.length + (hasOpenList ? 1 : 0) + embySourcesCount,
         timestamp: Date.now()
       })}\n\n`;
 
@@ -109,6 +123,9 @@ export async function GET(request: NextRequest) {
             const { embyManager } = await import('@/lib/emby-manager');
             const embySourcesMap = await embyManager.getAllClients();
             const embySources = Array.from(embySourcesMap.values());
+
+            // 获取代理 token（用于图片代理）
+            const proxyToken = await getProxyToken(request);
 
             // 为每个 Emby 源并发搜索，并单独发送结果
             const embySearchPromises = embySources.map(async ({ client, config: embyConfig }) => {
@@ -131,7 +148,7 @@ export async function GET(request: NextRequest) {
                   source: sourceValue,
                   source_name: sourceName,
                   title: item.Name,
-                  poster: client.getImageUrl(item.Id, 'Primary'),
+                  poster: client.getImageUrl(item.Id, 'Primary', undefined, client.isProxyEnabled() ? proxyToken || undefined : undefined),
                   episodes: [],
                   episodes_titles: [],
                   year: item.ProductionYear?.toString() || '',
@@ -294,7 +311,7 @@ export async function GET(request: NextRequest) {
       }
 
       // 为每个源创建搜索 Promise
-      const searchPromises = apiSites.map(async (site) => {
+      const searchPromises = sortedApiSites.map(async (site) => {
         try {
           // 添加超时控制
           const searchPromise = Promise.race([
@@ -363,7 +380,7 @@ export async function GET(request: NextRequest) {
         }
 
         // 检查是否所有源都已完成
-        if (completedSources === apiSites.length + (hasOpenList ? 1 : 0) + embySourcesCount) {
+        if (completedSources === sortedApiSites.length + (hasOpenList ? 1 : 0) + embySourcesCount) {
           if (!streamClosed) {
             // 发送最终完成事件
             const completeEvent = `data: ${JSON.stringify({

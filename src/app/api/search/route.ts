@@ -6,6 +6,7 @@ import { getAuthInfoFromCookie } from '@/lib/auth';
 import { getAvailableApiSites, getCacheTime, getConfig } from '@/lib/config';
 import { searchFromApi } from '@/lib/downstream';
 import { yellowWords } from '@/lib/yellow';
+import { getProxyToken } from '@/lib/emby-token';
 
 export const runtime = 'nodejs';
 
@@ -36,6 +37,12 @@ export async function GET(request: NextRequest) {
   const config = await getConfig();
   const apiSites = await getAvailableApiSites(authInfo.username);
 
+  // 创建权重映射表
+  const weightMap = new Map<string, number>();
+  config.SourceConfig.forEach(source => {
+    weightMap.set(source.key, source.weight ?? 0);
+  });
+
   // 检查是否配置了 OpenList
   const hasOpenList = !!(
     config.OpenListConfig?.Enabled &&
@@ -51,6 +58,9 @@ export async function GET(request: NextRequest) {
 
   console.log('[Search] Emby sources count:', embySources.length);
   console.log('[Search] Emby sources:', embySources.map(s => ({ key: s.config.key, name: s.config.name })));
+
+  // 获取代理 token（用于图片代理）
+  const proxyToken = await getProxyToken(request);
 
   // 为每个 Emby 源创建搜索 Promise（全部并发，无限制）
   const embyPromises = embySources.map(({ client, config: embyConfig }) =>
@@ -74,7 +84,7 @@ export async function GET(request: NextRequest) {
             source: sourceValue,
             source_name: sourceName,
             title: item.Name,
-            poster: client.getImageUrl(item.Id, 'Primary'),
+            poster: client.getImageUrl(item.Id, 'Primary', undefined, client.isProxyEnabled() ? proxyToken || undefined : undefined),
             episodes: [],
             episodes_titles: [],
             year: item.ProductionYear?.toString() || '',
@@ -191,6 +201,14 @@ export async function GET(request: NextRequest) {
         return !yellowWords.some((word: string) => typeName.includes(word));
       });
     }
+
+    // 按权重降序排序
+    flattenedResults.sort((a, b) => {
+      const weightA = weightMap.get(a.source) ?? 0;
+      const weightB = weightMap.get(b.source) ?? 0;
+      return weightB - weightA;
+    });
+
     const cacheTime = await getCacheTime();
 
     if (flattenedResults.length === 0) {
